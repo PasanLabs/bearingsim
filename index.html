@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bearing Analysis: Temperature, Viscosity & Skidding</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Sarabun', 'Inter', sans-serif; background-color: #f8fafc; }
+        canvas { touch-action: none; }
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%; background: #3b82f6; cursor: pointer; margin-top: -8px; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 6px; cursor: pointer; background: #cbd5e1; border-radius: 3px; }
+        input[type=range]:focus { outline: none; }
+        .mode-btn { transition: all 0.2s; }
+        .mode-btn.active { background-color: #2563eb; color: white; border-color: #2563eb; }
+    </style>
+</head>
+<body class="min-h-screen text-slate-800 p-2 md:p-6 flex justify-center items-start">
+
+    <div class="max-w-6xl w-full bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col lg:flex-row">
+        
+        <!-- Left Column: Canvas Simulation -->
+        <div class="w-full lg:w-1/2 bg-slate-900 relative flex flex-col justify-center items-center p-4 min-h-[400px] lg:min-h-[600px]">
+            <canvas id="simCanvas" class="max-w-full rounded-lg"></canvas>
+            <div id="statusBadge" class="absolute top-4 left-4 px-3 py-1 rounded-full text-sm font-bold tracking-wide transition-colors duration-300 bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 z-10">
+                สถานะ: กลิ้งปกติ
+            </div>
+        </div>
+
+        <!-- Right Column: Controls & Chart -->
+        <div class="w-full lg:w-1/2 p-4 md:p-8 flex flex-col h-full overflow-y-auto">
+            <h1 class="text-2xl font-bold mb-1 text-slate-800">วิเคราะห์พฤติกรรมตลับลูกปืน</h1>
+            <p class="text-sm text-slate-500 mb-6">ความสัมพันธ์ระหว่างอุณหภูมิ ความหนืด และอาการลื่นไถล (Skidding)</p>
+
+            <!-- Controls -->
+            <div class="space-y-5 bg-slate-50 p-4 rounded-xl border border-slate-200 mb-6">
+                <!-- Mode -->
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 mb-2">โหมดการทำงาน</label>
+                    <div class="flex space-x-2">
+                        <button id="btnAuto" class="mode-btn active flex-1 py-2 px-2 md:px-4 border border-slate-300 rounded-lg text-xs md:text-sm font-medium text-slate-700 hover:bg-white">อิงตามอุณหภูมิ (Auto)</button>
+                        <button id="btnSkidding" class="mode-btn flex-1 py-2 px-2 md:px-4 border border-slate-300 rounded-lg text-xs md:text-sm font-medium text-slate-700 hover:bg-white">บังคับไถล (Force Skid)</button>
+                    </div>
+                </div>
+
+                <!-- Shaft Speed -->
+                <div>
+                    <div class="flex justify-between mb-1">
+                        <label class="block text-sm font-semibold text-slate-700">ความเร็วรอบเพลา (Shaft Speed)</label>
+                        <span id="speedValue" class="text-sm text-blue-600 font-bold">1500 RPM</span>
+                    </div>
+                    <input type="range" id="sliderSpeed" min="500" max="5000" step="100" value="1500">
+                </div>
+
+                <!-- Grease Temperature -->
+                <div>
+                    <div class="flex justify-between mb-1">
+                        <label class="block text-sm font-semibold text-slate-700">อุณหภูมิจารบี (Grease Temp)</label>
+                        <span id="tempValue" class="text-sm text-rose-600 font-bold">60 °C</span>
+                    </div>
+                    <input type="range" id="sliderTemp" min="0" max="140" step="5" value="60">
+                </div>
+
+                <!-- Viscosity Display -->
+                <div class="bg-white p-3 rounded border border-slate-200 flex justify-between items-center">
+                    <span class="text-sm font-semibold text-slate-700">ความหนืดขณะทำงาน (Kinematic Viscosity):</span>
+                    <span id="viscosityValue" class="text-lg font-bold text-slate-800">40.0 cSt</span>
+                </div>
+            </div>
+
+            <!-- Chart -->
+            <div class="w-full bg-white relative h-[250px] mb-4">
+                <canvas id="viscosityChart"></canvas>
+            </div>
+
+            <!-- Explanation Panel -->
+            <div class="bg-blue-50/50 p-4 rounded-xl border border-blue-100 text-sm mt-auto">
+                <p id="descText" class="text-slate-600 leading-relaxed">
+                    <strong>สถานะปกติ:</strong> อุณหภูมิและความหนืดอยู่ในเกณฑ์เหมาะสม ฟิล์มหล่อลื่นทำงานได้ดี ลูกกลิ้งหมุนได้สมบูรณ์
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- DATA & LOGIC ---
+        // Temp to Viscosity mapping (approximate for typical ISO VG 100 bearing grease)
+        const tempPoints = [0, 20, 40, 60, 80, 100, 120, 140];
+        const visPoints = [1000, 250, 100, 40, 20, 10, 6, 4];
+        
+        // Linear interpolation function for viscosity
+        function getViscosity(temp) {
+            if (temp <= tempPoints[0]) return visPoints[0];
+            if (temp >= tempPoints[tempPoints.length-1]) return visPoints[visPoints.length-1];
+            for (let i = 0; i < tempPoints.length - 1; i++) {
+                if (temp >= tempPoints[i] && temp <= tempPoints[i+1]) {
+                    const t1 = tempPoints[i], t2 = tempPoints[i+1];
+                    const v1 = visPoints[i], v2 = visPoints[i+1];
+                    // Using log scale interpolation for realistic viscosity curve
+                    const logV = Math.log(v1) + (Math.log(v2) - Math.log(v1)) * ((temp - t1) / (t2 - t1));
+                    return Math.exp(logV);
+                }
+            }
+            return 40;
+        }
+
+        // --- DOM ELEMENTS ---
+        const sliderSpeed = document.getElementById('sliderSpeed');
+        const sliderTemp = document.getElementById('sliderTemp');
+        const speedValue = document.getElementById('speedValue');
+        const tempValue = document.getElementById('tempValue');
+        const viscosityValue = document.getElementById('viscosityValue');
+        const statusBadge = document.getElementById('statusBadge');
+        const descText = document.getElementById('descText');
+        const btnAuto = document.getElementById('btnAuto');
+        const btnSkidding = document.getElementById('btnSkidding');
+        
+        let isForcedSkid = false;
+        let currentTemp = parseInt(sliderTemp.value);
+        let currentSpeed = parseInt(sliderSpeed.value);
+        let currentViscosity = getViscosity(currentTemp);
+
+        // --- CHART.JS SETUP ---
+        const ctxChart = document.getElementById('viscosityChart').getContext('2d');
+        const chart = new Chart(ctxChart, {
+            type: 'line',
+            data: {
+                labels: tempPoints,
+                datasets: [{
+                    label: 'ความหนืดของจารบี (cSt)',
+                    data: visPoints,
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    borderWidth: 2,
+                    tension: 0.4,
+                    fill: true,
+                    pointRadius: 0,
+                    pointHoverRadius: 0
+                }, {
+                    label: 'จุดทำงานปัจจุบัน (Operating Point)',
+                    data: [{x: currentTemp, y: currentViscosity}],
+                    backgroundColor: '#ef4444',
+                    borderColor: '#ef4444',
+                    pointRadius: 6,
+                    pointStyle: 'circle',
+                    type: 'scatter'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { type: 'linear', min: 0, max: 140, title: { display: true, text: 'อุณหภูมิ (°C)' } },
+                    y: { type: 'logarithmic', min: 1, max: 1500, title: { display: true, text: 'ความหนืด (cSt) [Log Scale]' } }
+                },
+                plugins: { legend: { position: 'top', labels: { boxWidth: 12 } } }
+            }
+        });
+
+        // --- EVENT LISTENERS ---
+        btnAuto.addEventListener('click', () => { isForcedSkid = false; btnAuto.classList.add('active'); btnSkidding.classList.remove('active'); updateState(); });
+        btnSkidding.addEventListener('click', () => { isForcedSkid = true; btnSkidding.classList.add('active'); btnAuto.classList.remove('active'); updateState(); });
+        
+        sliderSpeed.addEventListener('input', (e) => { currentSpeed = parseInt(e.target.value); speedValue.textContent = currentSpeed + ' RPM'; updateState(); });
+        sliderTemp.addEventListener('input', (e) => { currentTemp = parseInt(e.target.value); tempValue.textContent = currentTemp + ' °C'; currentViscosity = getViscosity(currentTemp); viscosityValue.textContent = currentViscosity.toFixed(1) + ' cSt'; updateState(); });
+
+        let actualSkidFactor = 0; // 0 = rolling, 1 = skidding
+
+        function updateState() {
+            let targetSkid = 0;
+            
+            // Update chart point
+            chart.data.datasets[1].data = [{x: currentTemp, y: currentViscosity}];
+            chart.update();
+
+            if (isForcedSkid) {
+                targetSkid = 0.8;
+                descText.innerHTML = `<strong>โหมดบังคับไถล (Forced Skid):</strong> ลูกกลิ้งหยุดหมุนรอบตัวเอง เกิดการลากถูอย่างรุนแรง ทำให้เกิดรอยไหม้และสึกหรออย่างรวดเร็ว (Smearing)`;
+                setBadge("bg-rose-500/20", "text-rose-400", "border-rose-500/50", "สถานะ: ลื่นไถลรุนแรง (Skidding!)");
+            } else {
+                if (currentViscosity > 300) {
+                    // Too cold/thick
+                    targetSkid = Math.min((currentViscosity - 300) / 700, 0.9);
+                    descText.innerHTML = `<strong>จารบีหนืดเกินไป (อุณหภูมิต่ำ):</strong> ความหนืดที่สูงระดับนี้สร้างแรงต้าน (Drag) สูงมาก ลูกกลิ้งฝืดจนไม่สามารถหมุนได้ทันและเกิดการลื่นไถลไปกับราง`;
+                    setBadge("bg-orange-500/20", "text-orange-400", "border-orange-500/50", "สถานะ: ไถลจากจารบีหนืด");
+                } else if (currentViscosity < 10) {
+                    // Too hot/thin
+                    targetSkid = 0.2; // Slight skid/instability
+                    descText.innerHTML = `<strong>จารบีเหลวเกินไป (ฟิล์มหล่อลื่นแตก):</strong> อุณหภูมิสูงทำให้ความหนืดต่ำกว่าเกณฑ์ ฟิล์มน้ำมันบางจนโลหะเสียดสีกัน เกิดความร้อนสะสมและเสี่ยงตลับลูกปืนไหม้`;
+                    setBadge("bg-red-500/20", "text-red-500", "border-red-500/50", "สถานะ: ฟิล์มหล่อลื่นบาง/โลหะครูด");
+                } else {
+                    // Optimal
+                    targetSkid = 0;
+                    descText.innerHTML = `<strong>สถานะปกติ (Optimal):</strong> ความหนืดอยู่ในช่วง 20 - 100 cSt ฟิล์มหล่อลื่นมีความหนาพอดี ลูกกลิ้งหมุนกลิ้งอย่างสมบูรณ์แบบโดยไม่ไถล`;
+                    setBadge("bg-emerald-500/20", "text-emerald-400", "border-emerald-500/50", "สถานะ: กลิ้งปกติ (Normal Rolling)");
+                }
+            }
+            return targetSkid;
+        }
+
+        function setBadge(bg, text_color, border, text) {
+            statusBadge.className = `absolute top-4 left-4 px-3 py-1 rounded-full text-sm font-bold tracking-wide transition-colors duration-300 border z-10 ${bg} ${text_color} ${border}`;
+            statusBadge.textContent = text;
+        }
+
+        // --- CANVAS SIMULATION ---
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        let cx=0, cy=0, R_inner=0, R_outer=0, r_roller=0;
+        const numRollers = 12;
+        let rollers = Array.from({length: numRollers}, (_, i) => ({ selfAngle: 0, orbitAngle: (i / numRollers) * Math.PI * 2 }));
+        let particles = [];
+        let currentShaftAngle = 0;
+        let cageAngle = 0;
+
+        function resizeCanvas() {
+            const parent = canvas.parentElement;
+            const size = Math.min(parent.clientWidth - 32, parent.clientHeight - 32, 500);
+            canvas.width = size;
+            canvas.height = size;
+            cx = size/2; cy = size/2;
+            R_outer = size * 0.35; 
+            R_inner = size * 0.18; 
+            
+            // คำนวณรัศมีวงโคจรตรงกลาง
+            let R_center = (R_inner + R_outer) / 2;
+            
+            // 1. ขนาดใหญ่สุดที่เป็นไปได้เมื่อเทียบกับความกว้างราง (เว้นขอบ 10%)
+            let maxRadiusByWidth = (R_outer - R_inner) / 2 * 0.9;
+            
+            // 2. ขนาดใหญ่สุดที่เป็นไปได้เมื่อเทียบกับระยะห่างระหว่างลูก (เว้นช่องว่างระหว่างลูก 15%)
+            let maxRadiusBySpacing = R_center * Math.sin(Math.PI / numRollers) * 0.85;
+            
+            // เลือกใช้ขนาดที่เล็กกว่าเสมอ เพื่อการันตีว่าจะไม่ล้นรางและไม่ทับกัน
+            r_roller = Math.min(maxRadiusByWidth, maxRadiusBySpacing);
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+        
+        class Particle {
+            constructor(x, y, angle, color) {
+                this.x = x; this.y = y;
+                const speed = Math.random() * 2 + 1;
+                const spread = (Math.random() - 0.5) * 0.8;
+                this.vx = Math.cos(angle + Math.PI/2 + spread) * speed;
+                this.vy = Math.sin(angle + Math.PI/2 + spread) * speed;
+                this.life = 1.0; this.decay = Math.random() * 0.05 + 0.02;
+                this.color = color;
+            }
+            update() { this.x += this.vx; this.y += this.vy; this.life -= this.decay; }
+            draw(ctx) { ctx.globalAlpha = Math.max(0, this.life); ctx.fillStyle = this.color; ctx.beginPath(); ctx.arc(this.x, this.y, 1.5, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha = 1.0; }
+        }
+
+        let lastTime = 0;
+        function loop(timestamp) {
+            let dt = (timestamp - lastTime) / 1000; if(dt > 0.1) dt = 0.1;
+            lastTime = timestamp;
+
+            let targetSkid = updateState();
+            actualSkidFactor += (targetSkid - actualSkidFactor) * dt * 5;
+
+            // Kinematics
+            let w_shaft = (currentSpeed / 1500) * Math.PI; // Base speed mapping
+            let V_inner = w_shaft * R_inner;
+            let w_cage_ideal = (V_inner / 2) / ((R_inner + R_outer) / 2);
+            let w_roller_ideal = -(V_inner / 2) / r_roller; 
+
+            let current_w_roller = w_roller_ideal * (1 - actualSkidFactor);
+            
+            currentShaftAngle += w_shaft * dt;
+            cageAngle += w_cage_ideal * dt;
+
+            for (let i = 0; i < numRollers; i++) {
+                rollers[i].selfAngle += current_w_roller * dt;
+                // Sparks if skidding or film broken
+                if ((actualSkidFactor > 0.1 || currentViscosity < 10) && Math.random() < Math.max(actualSkidFactor, 0.3) * 0.5) {
+                    let angle = cageAngle + rollers[i].orbitAngle;
+                    let px = cx + Math.cos(angle) * R_inner;
+                    let py = cy + Math.sin(angle) * R_inner;
+                    let color = currentViscosity < 10 ? '#f59e0b' : '#ef4444'; // Orange for hot, Red for skid
+                    particles.push(new Particle(px, py, angle, color));
+                }
+            }
+
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                if (particles[i].life <= 0) particles.splice(i, 1);
+            }
+
+            render();
+            requestAnimationFrame(loop);
+        }
+
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Outer Ring
+            ctx.beginPath(); ctx.arc(cx, cy, R_outer + 15, 0, Math.PI*2); ctx.arc(cx, cy, R_outer, 0, Math.PI*2, true);
+            ctx.fillStyle = '#475569'; ctx.fill();
+            ctx.strokeStyle = '#334155'; ctx.lineWidth = 2; ctx.stroke();
+
+            // Inner Ring (Shaft)
+            ctx.save();
+            ctx.translate(cx, cy); ctx.rotate(currentShaftAngle);
+            ctx.beginPath(); ctx.arc(0, 0, R_inner, 0, Math.PI*2); ctx.fillStyle = '#94a3b8'; ctx.fill();
+            // Markers
+            ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 3; ctx.beginPath();
+            ctx.moveTo(-R_inner+5, 0); ctx.lineTo(R_inner-5, 0); ctx.moveTo(0, -R_inner+5); ctx.lineTo(0, R_inner-5); ctx.stroke();
+            ctx.beginPath(); ctx.arc(0, 0, R_inner*0.3, 0, Math.PI*2); ctx.fillStyle = '#1e293b'; ctx.fill();
+            ctx.restore();
+
+            // Heat Glow
+            let heatIntensity = Math.max(actualSkidFactor, currentViscosity < 10 ? 0.8 : 0);
+            if (heatIntensity > 0.05) {
+                ctx.save(); ctx.globalAlpha = heatIntensity * 0.7; ctx.beginPath(); ctx.arc(cx, cy, R_inner+2, 0, Math.PI*2);
+                ctx.strokeStyle = currentViscosity < 10 ? '#f59e0b' : '#ef4444'; ctx.lineWidth = 6; ctx.shadowBlur = 15; ctx.shadowColor = ctx.strokeStyle; ctx.stroke(); ctx.restore();
+            }
+
+            // Rollers
+            let R_center = (R_inner + R_outer) / 2;
+            for (let i = 0; i < numRollers; i++) {
+                let angle = cageAngle + rollers[i].orbitAngle;
+                let rx = cx + Math.cos(angle) * R_center; let ry = cy + Math.sin(angle) * R_center;
+                ctx.save(); ctx.translate(rx, ry); ctx.rotate(angle + rollers[i].selfAngle);
+                
+                ctx.beginPath(); ctx.arc(0, 0, r_roller, 0, Math.PI*2);
+                if (heatIntensity > 0.1) {
+                    let r = 148 + (100 * heatIntensity), gb = 163 - (50 * heatIntensity);
+                    ctx.fillStyle = `rgb(${r}, ${gb}, ${gb})`;
+                } else { ctx.fillStyle = '#e2e8f0'; }
+                ctx.fill(); ctx.strokeStyle = '#64748b'; ctx.lineWidth = 2; ctx.stroke();
+                
+                // Rotation marker line
+                ctx.strokeStyle = (heatIntensity > 0.5) ? '#991b1b' : '#334155'; ctx.lineWidth = 2;
+                ctx.beginPath(); ctx.moveTo(0, -r_roller*0.7); ctx.lineTo(0, r_roller*0.7); ctx.stroke();
+                ctx.fillStyle = '#0f172a'; ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI*2); ctx.fill();
+                ctx.restore();
+            }
+
+            for (let p of particles) p.draw(ctx);
+        }
+
+        updateState();
+        requestAnimationFrame(loop);
+    </script>
+</body>
+</html>
